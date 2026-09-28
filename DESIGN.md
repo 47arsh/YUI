@@ -108,7 +108,7 @@ Near-achromatic warm neutral with a single point of amber. The model is **dark s
 - **Muted Ash** (`oklch(0.66 0.014 72)`): disabled text, hints, eyebrows.
 - **Scrim** (`oklch(0.21 0.014 70 / 0.64)`): the semi-transparent dark backdrop under every floating surface; a stronger variant (`oklch(0.19 0.014 70 / 0.82)`) sharpens the text input and the small-label chips (tool-status, capture/voice pills).
 - **Hairline** (`oklch(0.97 0.01 80 / 0.1)`, hover `/ 0.16`): the thin edge that holds a surface outline against a dark backdrop.
-- **Warm Ink** (`oklch(0.22 0.01 70)`): dark body text, retained for light contexts only; never used on a floating surface.
+- **Warm Ink** (`oklch(0.22 0.01 70)`, `--yui-ink`): dark text for light contexts and for the count on the folded delegation chip's amber badge. Body text on a floating surface stays light.
 
 ### Functional
 - **Ember Red** (`oklch(0.77 0.11 35)`, `--yui-danger`): undo, failure messaging and the failed-delegation dot. Hue 35 keeps it clear of the amber accent; soft and faint variants match the accent pattern.
@@ -194,4 +194,4 @@ Paired status pills at the top edge (`capture-indicator.css`, `voice-input-indic
 - **Don't** use pushy, garish speech bubbles like an **old desktop mascot** (Clippy), the exact opposite of non-intrusive.
 - **Don't** overuse glassmorphism: the frosted backdrop is purposeful in the one speech bubble only, otherwise skip it.
 - **Don't** use side-stripe borders (a color line >1px on an edge), gradient text (`background-clip: text`), identical card grids, or modal-first patterns.
-- **Don't** use amber as a fill: warmth is a point, not a plane (the 10% Warmth Rule).
+- **Don't** use amber as a fill: warmth is a point, not a plane (the 10% Warmth Rule). The one fill is the count badge on the folded delegation chip, a 1rem dot sized as a point so a pending count stays visible over any desktop.

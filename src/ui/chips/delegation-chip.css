@@ -108,7 +108,7 @@
   padding: 0 0.2rem;
   border-radius: var(--yui-radius-chip);
   background: var(--yui-accent);
-  color: oklch(0.22 0.01 70); /* warm ink — dark text the amber badge needs */
+  color: var(--yui-ink);
   font-size: 0.65rem;
   font-weight: 600;
   text-shadow: none;

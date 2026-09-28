@@ -16,6 +16,7 @@
   --yui-text: oklch(0.95 0.012 80); /* Body speech */
   --yui-text-dim: oklch(0.78 0.016 75); /* Labels, tool state, secondary */
   --yui-text-mute: oklch(0.66 0.014 72); /* Inactive, hints, eyebrow */
+  --yui-ink: oklch(0.22 0.01 70); /* Dark text on an amber fill (delegation count badge) */
 
   /* ── Surface (Scrim) ──
      Translucent dark background of floating surfaces like bubble, chip. Key to readability over arbitrary backgrounds. */
