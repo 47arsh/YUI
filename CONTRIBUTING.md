@@ -58,6 +58,12 @@ pnpm docs:build             # vitepress build + dead-link check
 pnpm lint                   # biome
 ```
 
+## License of contributions
+
+By submitting a contribution, you license it to the project under the
+[PolyForm Noncommercial License 1.0.0](LICENSE) and grant YoungWoo Nam the right
+to relicense it, including under commercial terms.
+
 ## Going deeper
 
 - [`AGENTS.md`](AGENTS.md) — project orientation (architecture, core principle, doc index); the `yui-dev-workflow` skill holds the dev work rules and delegation model
