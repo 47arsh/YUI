@@ -61,8 +61,6 @@ async function bootstrap(): Promise<void> {
     screenSettings,
     screenKnobSettings,
     guardrailsSettings,
-    railCollapsedSettings,
-    sectionsSettings,
     lipsyncSettings,
     vadSettings,
     fillerSettings,
@@ -240,8 +238,6 @@ async function bootstrap(): Promise<void> {
           return undefined;
         }
       },
-      railCollapsedSettings,
-      sectionsSettings,
       sourceProvider,
       voiceStatus: voiceInputStatus,
       lipsync: lipsyncSettings,
@@ -326,9 +322,10 @@ async function bootstrap(): Promise<void> {
   const unsubscribeCueSync = wireCueLocaleSync(settingsStores);
   const unsubscribeLocale = subscribeLocale(() => {
     queueMicrotask(() => {
+      const tab = quickControls.selectedTab();
       quickControls.dispose();
       quickControls = buildQuickControls();
-      quickControls.open();
+      quickControls.open(undefined, { tab });
     });
   });
 

@@ -69,16 +69,17 @@ describe("createQuickControls — history tab", () => {
     return createQuickControls({ ...defaultQcArgs(mount), ...extra });
   }
 
-  it("adds a 6th rail tab wired to its own panel when a transcript is injected", () => {
+  it("adds a history tab before general, wired to its own panel, when a transcript is injected", () => {
     const qc = buildQc({ transcript: seedStore() });
     qc.open();
 
     const tabs = Array.from(qc.el.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-    expect(tabs).toHaveLength(6);
-    expect(qc.el.querySelectorAll('[role="tabpanel"]')).toHaveLength(6);
+    expect(tabs).toHaveLength(7);
+    expect(qc.el.querySelectorAll('[role="tabpanel"]')).toHaveLength(7);
 
     const histTab = tabs[5];
-    expect(histTab.textContent).toContain("History");
+    expect(histTab.id).toBe("yui-tab-hist");
+    expect(histTab.getAttribute("aria-label")).toBe("History");
     expect(histTab.getAttribute("aria-label")).toBeTruthy();
     expect(histTab.dataset.tip).toBeTruthy();
     expect(histTab.hasAttribute("title")).toBe(false);
@@ -92,13 +93,13 @@ describe("createQuickControls — history tab", () => {
     const qc = buildQc();
     qc.open();
 
-    expect(qc.el.querySelectorAll('[role="tab"]')).toHaveLength(5);
+    expect(qc.el.querySelectorAll('[role="tab"]')).toHaveLength(6);
     expect(qc.el.querySelector(".yui-hist")).toBeNull();
 
     qc.dispose();
   });
 
-  it("End key selects the history tab and moves the rail indicator", () => {
+  it("End key selects the general tab, which sits after history", () => {
     const qc = buildQc({ transcript: seedStore() });
     qc.open();
 
@@ -107,8 +108,8 @@ describe("createQuickControls — history tab", () => {
     tabs[0].focus();
     tablist.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
 
-    expect(tabs[5].getAttribute("aria-selected")).toBe("true");
-    expect(tablist.style.getPropertyValue("--tab")).toBe("5");
+    expect(tabs.map((tab) => tab.id).slice(-2)).toEqual(["yui-tab-hist", "yui-tab-general"]);
+    expect(tabs[6].getAttribute("aria-selected")).toBe("true");
 
     qc.dispose();
   });

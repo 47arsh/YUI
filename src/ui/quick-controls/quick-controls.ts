@@ -1,6 +1,6 @@
 /**
  * Quick-controls panel — settings panel summoned by right-click.
- * Comprises draggable header + tab strip (chat · character · input · advanced) + tab panel body.
+ * Comprises draggable header + tab rail (connection · talk · character · input · proactive · history · general) + tab panel body.
  * variant: "popover" (default, docked in pet window + draggable) | "window" (separate OS window, full fill).
  */
 
@@ -48,7 +48,6 @@ import type { createScreenshotSettings } from "../../settings/capture/screenshot
 import type { createProactiveSettings } from "../../settings/cues/proactive-settings";
 import type { createScheduleSettings } from "../../settings/cues/schedule-settings";
 import type { MessageWindowSettingsStore } from "../../settings/panels/message-window-settings";
-import type { createSectionsSettings } from "../../settings/panels/sections-settings";
 import type { ClampedIntSettingsStore, FlagSettingsStore } from "../../settings/persisted-store";
 import type { createFillerSettings } from "../../settings/voice/filler-settings";
 import {
@@ -60,7 +59,6 @@ import { DELEGATION_REFRESH_MS } from "../chips/delegation-rows";
 import type { VoiceInputStatus } from "../chips/voice-input-status";
 import { t } from "../i18n";
 import { type CueListInstance, createCueList } from "../message/cue-list";
-import { createSections } from "./collapsible-sections";
 import type { QuickControlsTab } from "./constants";
 import { createHintTooltip } from "./hint-tooltip";
 import { createPopover } from "./popover";
@@ -91,7 +89,6 @@ type LipsyncSettingsStore = ReturnType<typeof createLipsyncSettings>;
 type VadSettingsStore = ReturnType<typeof createVadSettings>;
 type AgentSettingsStore = ReturnType<typeof createAgentSettings>;
 type EndpointsSettingsStore = ReturnType<typeof createEndpointsSettings>;
-type SectionsSettingsStore = ReturnType<typeof createSectionsSettings>;
 type FillerSettingsStore = ReturnType<typeof createFillerSettings>;
 type VrmSelectionStore = ReturnType<typeof createVrmSelection>;
 type SpeakerSelectionStore = ReturnType<typeof createSpeakerSelection>;
@@ -220,10 +217,6 @@ interface QuickControlsOptions {
   screenKnobSettings?: ScreenKnobSettingsStore;
   /** Bundled config thresholds shown when a knob carries no override (undefined if not loaded). */
   getScreenDefaults?: () => ScreenOverrides | undefined;
-  /** Section rail collapse state store. */
-  railCollapsedSettings?: FlagSettingsStore;
-  /** Collapsible-sections open/closed state store. */
-  sectionsSettings?: SectionsSettingsStore;
   /** Per-variant idle-motion on/off store. If absent, the idle-motion section won't render. */
   idleMotionSettings?: IdleMotionSettingsStore;
   /** The read-only `idle` catalog entry backing that section (undefined until configs load). */
@@ -238,6 +231,8 @@ interface QuickControls {
   el: HTMLElement;
   /** Summon the panel. `tab` lands on that tab instead of the one last left selected. */
   open(anchor?: { x: number; y: number }, opts?: { tab?: QuickControlsTab }): void;
+  /** The tab the panel shows now. */
+  selectedTab(): QuickControlsTab;
   close(): void;
   isOpen(): boolean;
   dispose(): void;
@@ -305,8 +300,6 @@ export function createQuickControls({
   screenSettings,
   screenKnobSettings,
   getScreenDefaults,
-  railCollapsedSettings,
-  sectionsSettings,
   idleMotionSettings,
   getIdlePool,
   expressMotionSettings,
@@ -359,8 +352,6 @@ export function createQuickControls({
     showDevtools: !isWindow && !!onOpenDevtools,
     showMessage: !!onMessage,
     showHistory: !!transcript,
-    railCollapsed: railCollapsedSettings?.get().enabled ?? false,
-    closedSections: new Set(sectionsSettings?.get().closed ?? []),
   });
 
   const switchBtn = el.querySelector<HTMLButtonElement>(".yui-screenshot-switch")!;
@@ -374,8 +365,6 @@ export function createQuickControls({
   const vadSlider = el.querySelector<HTMLInputElement>(".yui-vad__slider")!;
   const tablistEl = el.querySelector<HTMLDivElement>(".yui-tabs")!;
   const tabButtons = Array.from(el.querySelectorAll<HTMLButtonElement>(".yui-tab"));
-  const railColsEl = el.querySelector<HTMLDivElement>(".yui-quick__cols")!;
-  const railCollapseBtn = el.querySelector<HTMLButtonElement>(".yui-rail-collapse")!;
   const barEl = el.querySelector<HTMLDivElement>(".yui-quick__bar");
   const popOutBtn = el.querySelector<HTMLButtonElement>(".yui-iconbtn--popout");
   const messageBtn = el.querySelector<HTMLButtonElement>(".yui-iconbtn--message");
@@ -418,7 +407,6 @@ export function createQuickControls({
   });
   const workflows = createWorkflowsSection({ root: el, store: workflowSettings, log });
   const hintTooltip = createHintTooltip({ root: el });
-  const sections = createSections({ root: el, sectionsSettings });
 
   // History tab (transcript viewer) — rendered only when a transcript store is injected.
   const history = transcript
@@ -564,7 +552,6 @@ export function createQuickControls({
       reflect.reflectChatPreset();
       reflect.reflectSession();
       syncDelegations();
-      sections.reflect();
       // The confirm is static markup — disarm it so a reopen never lands on the destructive pill.
       hideSessionConfirm();
       history?.render();
@@ -810,7 +797,6 @@ export function createQuickControls({
       const panel = el.querySelector<HTMLElement>(`#${tab.getAttribute("aria-controls")}`);
       if (panel) panel.hidden = !on;
     });
-    tablistEl.style.setProperty("--tab", String(clamped));
     if (focus) tabButtons[clamped]?.focus();
   }
 
@@ -820,26 +806,18 @@ export function createQuickControls({
     if (index >= 0) selectTab(index);
     popover.open(anchor);
     // open() lands focus on the first control; move it to the tab the caller asked for.
-    if (index >= 0) tabButtons[index]?.focus();
+    if (index >= 0) tabButtons[index]?.focus({ focusVisible: false });
+  }
+
+  function selectedTab(): QuickControlsTab {
+    const tab = tabButtons.find((b) => b.getAttribute("aria-selected") === "true")!;
+    return tab.id.slice("yui-tab-".length) as QuickControlsTab;
   }
 
   function handleTabClick(e: MouseEvent): void {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".yui-tab");
     if (!btn) return;
     selectTab(tabButtons.indexOf(btn));
-  }
-
-  // ── Section rail collapse/expand ──
-
-  function handleRailCollapseClick(): void {
-    const collapsed = !railColsEl.classList.contains("is-rail-collapsed");
-    railColsEl.classList.toggle("is-rail-collapsed", collapsed);
-    railCollapseBtn.setAttribute("aria-expanded", String(!collapsed));
-    const label = t(collapsed ? "panel.rail_expand" : "panel.rail_collapse");
-    railCollapseBtn.setAttribute("aria-label", label);
-    railCollapseBtn.dataset.tip = label;
-    railCollapsedSettings?.setEnabled(collapsed);
-    log.info("rail_collapse_toggle", { collapsed });
   }
 
   function handleTabKeydown(e: KeyboardEvent): void {
@@ -864,8 +842,7 @@ export function createQuickControls({
 
   const unsubscribe = settings.subscribe((s) => {
     if (!popover.isOpen()) return;
-    switchBtn.setAttribute("aria-checked", String(s.enabled));
-    el.classList.toggle("is-on", s.enabled);
+    reflect.reflectSettings();
     if (s.enabled && !monitorsSection.isLoaded()) {
       void monitorsSection.load();
     }
@@ -954,10 +931,6 @@ export function createQuickControls({
       reflect.reflectFiller();
     }
   });
-  // Reflect collapsed-sections store updates to the DOM (includes other-window reloadFromStorage).
-  const unsubscribeSections = sectionsSettings?.subscribe(() => {
-    if (popover.isOpen()) sections.reflect();
-  });
   // Reflect store updates (direct select · other-window reloadFromStorage) to active row.
   // Skip during swap — finally's renderVrms handles final render after loading.
   const unsubscribeVrm = vrmSelection.subscribe(() => {
@@ -1004,7 +977,6 @@ export function createQuickControls({
   // Gain/VAD sliders are wired inside bindSlider() above; disposeGainSlider/disposeVadSlider tear them down.
   tablistEl.addEventListener("click", handleTabClick);
   tablistEl.addEventListener("keydown", handleTabKeydown);
-  railCollapseBtn.addEventListener("click", handleRailCollapseClick);
   vrmsEl.addEventListener("keydown", vrmList.handleKeydown);
   vrmAddBtn.addEventListener("click", vrmList.handleAddClick);
   spksEl.addEventListener("keydown", speakerList.handleKeydown);
@@ -1030,7 +1002,6 @@ export function createQuickControls({
     reactions.dispose();
     agent.dispose();
     hintTooltip.dispose();
-    sections.dispose();
     history?.dispose();
     scheduleCueList?.destroy();
     proactiveCueList?.destroy();
@@ -1048,7 +1019,6 @@ export function createQuickControls({
     unsubscribeEndpoints();
     unsubscribePushState?.();
     unsubscribeFiller?.();
-    unsubscribeSections?.();
     unsubscribeVrm();
     unsubscribeSpk();
     unsubscribeSession?.();
@@ -1077,7 +1047,6 @@ export function createQuickControls({
     disposeVadSlider();
     tablistEl.removeEventListener("click", handleTabClick);
     tablistEl.removeEventListener("keydown", handleTabKeydown);
-    railCollapseBtn.removeEventListener("click", handleRailCollapseClick);
     vrmsEl.removeEventListener("keydown", vrmList.handleKeydown);
     vrmAddBtn.removeEventListener("click", vrmList.handleAddClick);
     spksEl.removeEventListener("keydown", speakerList.handleKeydown);
@@ -1094,5 +1063,12 @@ export function createQuickControls({
     scrimEl.remove();
   }
 
-  return { el, open: openPanel, close: popover.close, isOpen: popover.isOpen, dispose };
+  return {
+    el,
+    open: openPanel,
+    selectedTab,
+    close: popover.close,
+    isOpen: popover.isOpen,
+    dispose,
+  };
 }

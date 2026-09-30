@@ -73,6 +73,18 @@ describe("createPopover — focus management", () => {
     pop.dispose();
   });
 
+  // A pointer-opened panel must not open with a lit ring; the ring comes back on the first Tab.
+  it("open() moves focus without a visible focus ring", () => {
+    const focus = vi.spyOn(HTMLElement.prototype, "focus");
+    const { root, pop } = makePopover();
+    pop.open();
+
+    expect(focus).toHaveBeenLastCalledWith(expect.objectContaining({ focusVisible: false }));
+    expect(focus.mock.contexts.at(-1)).toBe(root.querySelector("button"));
+
+    pop.dispose();
+  });
+
   it("close() restores focus to the element focused before open()", () => {
     const trigger = document.createElement("button");
     trigger.type = "button";
@@ -100,6 +112,47 @@ describe("createPopover — focus management", () => {
     expect(document.activeElement).toBe(first);
 
     first.focus();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
+    );
+    expect(document.activeElement).toBe(last);
+
+    pop.dispose();
+  });
+
+  it("skips roving-tabindex members Tab never reaches — open() and the trap land on the roving stop", () => {
+    const root = document.createElement("div");
+    root.className = "yui-quick";
+    const [skippedFirst, stop, last, skippedLast] = [
+      "skipped-first",
+      "stop",
+      "last",
+      "skipped-last",
+    ].map((name) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = name;
+      return b;
+    });
+    skippedFirst.tabIndex = -1;
+    skippedLast.tabIndex = -1;
+    root.append(skippedFirst, stop, last, skippedLast);
+    const pop = createPopover({
+      mount,
+      root,
+      scrim: document.createElement("div"),
+      bar: null,
+      isWindow: false,
+      onOpen: () => {},
+      onClose: () => {},
+    });
+    pop.open();
+    expect(document.activeElement).toBe(stop);
+
+    last.focus();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    expect(document.activeElement).toBe(stop);
+
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
