@@ -25,7 +25,8 @@ import { createConversationStores } from "../app/settings/conversation-stores";
 import { wireSpeakerSelection, wireVrmSelection } from "../app/settings/wire-avatar";
 import { createPetConfig, wireConfigReload, wireConfigWatch } from "../app/settings/wire-config";
 import { wireCamera, wireInputAnchor } from "../app/stage/wire-pet-stage";
-import { createDelegationChipMount, wirePushMode, wirePushStores } from "../app/turn/wire-push";
+import { createPushStores, publishPushStores } from "../app/turn/push-stores";
+import { createDelegationChipMount, wirePushMode } from "../app/turn/wire-push";
 import { CHAT_API_KEY_SECRET, TTS_API_KEY_SECRET } from "../config/load";
 import { createEventBus } from "../dispatcher/core/event-bus";
 import { createUserInputSource } from "../dispatcher/sources/user-input-source";
@@ -199,12 +200,12 @@ async function bootstrap(): Promise<BootstrapHandle> {
     log,
   });
 
-  const push = wirePushStores({
+  const push = createPushStores({
     getEndpoints: petConfig.getEndpoints,
     getChatKey: () => config.secrets.get(CHAT_API_KEY_SECRET),
-    bridge: windowBridge,
     register,
   });
+  publishPushStores(push, windowBridge, register);
 
   const controls = wirePetControls({
     root,
