@@ -159,7 +159,7 @@ describe("composer — three equal icon buttons", () => {
   });
 });
 
-describe("reasoning disclosure — message window only", () => {
+describe("reasoning disclosure — only when a reasoning source is given", () => {
   let mount: HTMLElement;
 
   beforeEach(() => {
@@ -366,6 +366,31 @@ describe("reasoning disclosure — message window only", () => {
     reasoning.append("a long chain of thought");
 
     expect(bubble().classList.contains("is-scrollable")).toBe(true);
+    s.dispose();
+  });
+});
+
+describe("pop buttons — only with a pop target", () => {
+  const popButtons = (mount: HTMLElement): HTMLButtonElement[] => [
+    mount.querySelector<HTMLButtonElement>(".yui-bubble__pop")!,
+    mount.querySelector<HTMLButtonElement>(".yui-input__pop")!,
+  ];
+
+  it("shows both pop buttons when a pop target is given", () => {
+    const mount = document.createElement("div");
+    const s = createSurfaces({ mount, tool: noTool, onPop: () => {} });
+
+    for (const button of popButtons(mount)) expect(button.hidden).toBe(false);
+
+    s.dispose();
+  });
+
+  it("hides both pop buttons without a pop target", () => {
+    const mount = document.createElement("div");
+    const s = createSurfaces({ mount, tool: noTool });
+
+    for (const button of popButtons(mount)) expect(button.hidden).toBe(true);
+
     s.dispose();
   });
 });
