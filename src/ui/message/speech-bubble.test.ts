@@ -23,12 +23,13 @@ vi.mock("./markdown", async (importOriginal) => {
 
 import { INTERACTIVE_OVERLAY_SELECTORS } from "../../app/stage/wire-stage";
 import { createSurfaces } from "../surfaces/surfaces";
+import { noTool } from "../surfaces/test-helpers";
 import { renderMarkdownInline } from "./markdown";
 
 function makeSurfaces() {
   const mount = document.createElement("div");
   document.body.appendChild(mount);
-  const s = createSurfaces({ mount });
+  const s = createSurfaces({ tool: noTool, mount });
   return { s, mount };
 }
 
@@ -272,7 +273,7 @@ describe("dispose — cancels an in-flight fade fallback", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const mount = document.createElement("div");
     document.body.appendChild(mount);
-    const s = createSurfaces({ mount });
+    const s = createSurfaces({ tool: noTool, mount });
     const bubbleEl = mount.querySelector(".yui-bubble") as HTMLElement;
 
     s.beginSpeech();
@@ -347,7 +348,7 @@ describe("dwell-pause on hover", () => {
     vi.useFakeTimers();
     mount = document.createElement("div");
     document.body.appendChild(mount);
-    s = createSurfaces({ mount, dwellMs: 5000 });
+    s = createSurfaces({ tool: noTool, mount, dwellMs: 5000 });
   });
 
   afterEach(() => {
@@ -418,7 +419,7 @@ describe("endSpeech — deferred dwell for TTS playback", () => {
     vi.useFakeTimers();
     mount = document.createElement("div");
     document.body.appendChild(mount);
-    s = createSurfaces({ mount, dwellMs: DWELL });
+    s = createSurfaces({ tool: noTool, mount, dwellMs: DWELL });
   });
 
   afterEach(() => {
@@ -582,7 +583,7 @@ describe("close button — dismiss the bubble by hand", () => {
     vi.useFakeTimers();
     mount = document.createElement("div");
     document.body.appendChild(mount);
-    s = createSurfaces({ mount, dwellMs: 5000 });
+    s = createSurfaces({ tool: noTool, mount, dwellMs: 5000 });
   });
 
   afterEach(() => {
@@ -673,7 +674,12 @@ describe("keep bubble until dismissed", () => {
     mount = document.createElement("div");
     document.body.appendChild(mount);
     keep = true;
-    s = createSurfaces({ mount, dwellMs: DWELL, keepBubbleUntilDismissed: () => keep });
+    s = createSurfaces({
+      tool: noTool,
+      mount,
+      dwellMs: DWELL,
+      keepBubbleUntilDismissed: () => keep,
+    });
   });
 
   afterEach(() => {
@@ -762,7 +768,7 @@ describe("pop-out button — moving speech to the message window", () => {
     mount = document.createElement("div");
     document.body.appendChild(mount);
     onPop = vi.fn<() => void>();
-    s = createSurfaces({ mount, onPop });
+    s = createSurfaces({ tool: noTool, mount, onPop });
   });
 
   afterEach(() => {

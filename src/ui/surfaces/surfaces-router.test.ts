@@ -4,7 +4,7 @@
  *
  * Every consumer keeps talking to a single `Surfaces`; the router sends the
  * bubble and input halves to whichever side the current mode names, keeps the
- * tool chip and the anchor local, and hides the surface on the side being left
+ * tool status and the anchor local, and hides the surface on the side being left
  * when the mode flips.
  */
 
@@ -17,6 +17,7 @@ import type { MessageWindowMode } from "../../settings/panels/message-window-set
 import { createMessagePlate } from "../message/message-plate";
 import { createSurfaces, type Surfaces } from "./surfaces";
 import { createSurfacesRouter } from "./surfaces-router";
+import { noTool } from "./test-helpers";
 
 /** The caps configs/guardrails.json delivers through setAttachmentLimits. */
 const LIMITS = guardrailsFixture().attachments;
@@ -344,7 +345,7 @@ describe("createSurfacesRouter over the message bridge", () => {
 
     /** The message window's surfaces and plate, wired to the bridge as its bootstrap does. */
     const mountMessageWindow = () => {
-      const surfaces = createSurfaces({ mount: document.createElement("div") });
+      const surfaces = createSurfaces({ tool: noTool, mount: document.createElement("div") });
       surfaces.onSubmit((text, images) =>
         messageBridge.emitControl({ op: "submit", text, images }),
       );
