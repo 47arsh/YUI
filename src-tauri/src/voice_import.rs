@@ -201,6 +201,44 @@ fn remove_user_voice_at(references_dir: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Move `references_dir/<from>/` to `references_dir/<to>/` and return the clip under its new id.
+/// `to` must be an id `voice_id_from_name` itself produces; a `from` already gone while `to`
+/// exists counts as moved, so a rename interrupted before the caller persisted it completes.
+fn rename_user_voice_at(
+    references_dir: &Path,
+    from: &str,
+    to: &str,
+) -> Result<ImportedVoice, String> {
+    if voice_id_from_name(to) != to || sanitize_stem(from) != from {
+        return Err("invalid voice id".to_string());
+    }
+    let src = references_dir.join(from);
+    let dest = references_dir.join(to);
+    ensure_within(references_dir, &src)?;
+    ensure_within(references_dir, &dest)?;
+    if src.exists() {
+        if dest.exists() {
+            return Err("voice id taken".to_string());
+        }
+        std::fs::rename(&src, &dest).map_err(|e| {
+            log::error!("voice_rename_failed dest={} error={e}", dest.display());
+            "storage unavailable".to_string()
+        })?;
+    } else if !dest.exists() {
+        return Err("voice not found".to_string());
+    }
+    let clip = std::fs::read_dir(&dest)
+        .map_err(|_| "voice not found".to_string())?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.file_stem().is_some_and(|s| s == "clip"))
+        .ok_or("voice not found".to_string())?;
+    Ok(ImportedVoice {
+        id: to.to_string(),
+        ref_path: clip.to_string_lossy().into_owned(),
+    })
+}
+
 /// Copy a user-picked audio file into `<app_data_dir>/references/<id>/clip.<ext>`, where `<id>`
 /// is the server-charset voice id `voice_id_from_name` derives from the typed `desired_name`.
 #[command]
@@ -240,6 +278,24 @@ pub fn remove_user_voice(app: AppHandle, id: String) -> Result<(), String> {
         })?
         .join("references");
     remove_user_voice_at(&references_dir, &id)
+}
+
+/// Move `<app_data_dir>/references/<from>/` to `<app_data_dir>/references/<to>/`.
+#[command]
+pub fn rename_user_voice(
+    app: AppHandle,
+    from: String,
+    to: String,
+) -> Result<ImportedVoice, String> {
+    let references_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| {
+            log::error!("app_data_dir_unavailable error={e}");
+            "storage unavailable".to_string()
+        })?
+        .join("references");
+    rename_user_voice_at(&references_dir, &from, &to)
 }
 
 /// A `copy_into_references` transactional sibling left behind by a process death between its
@@ -730,6 +786,86 @@ mod tests {
         let err = copy_into_references(&dir.join("references"), &src, "wav", "Fake").unwrap_err();
         assert!(!err.contains('/'), "error must not leak a path: {err:?}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── rename_user_voice_at ─────────────────────────────────────────────────
+
+    #[test]
+    fn rename_at_moves_the_voice_dir_and_returns_its_clip() {
+        let references = unique_dir("rename_ok");
+        std::fs::create_dir_all(references.join("芳乃")).unwrap();
+        std::fs::write(references.join("芳乃").join("clip.wav"), b"clip").unwrap();
+        let to = voice_id_from_name("芳乃");
+
+        let renamed = rename_user_voice_at(&references, "芳乃", &to).unwrap();
+
+        assert_eq!(renamed.id, to);
+        assert_eq!(
+            PathBuf::from(&renamed.ref_path),
+            references.join(&to).join("clip.wav")
+        );
+        assert_eq!(
+            std::fs::read(references.join(&to).join("clip.wav")).unwrap(),
+            b"clip"
+        );
+        assert!(!references.join("芳乃").exists());
+        std::fs::remove_dir_all(&references).ok();
+    }
+
+    #[test]
+    fn rename_at_refuses_a_to_outside_references_and_moves_nothing() {
+        let app_data = unique_dir("rename_escape");
+        let references = app_data.join("references");
+        std::fs::create_dir_all(references.join("希")).unwrap();
+        std::fs::write(references.join("希").join("clip.wav"), b"clip").unwrap();
+
+        for to in ["../escaped", "..", "sub/dir", "希"] {
+            assert!(
+                rename_user_voice_at(&references, "希", to).is_err(),
+                "{to:?} must be refused"
+            );
+        }
+        assert!(references.join("希").join("clip.wav").exists());
+        assert!(!app_data.join("escaped").exists());
+        std::fs::remove_dir_all(&app_data).ok();
+    }
+
+    #[test]
+    fn rename_at_refuses_when_both_folders_exist_and_changes_neither() {
+        let references = unique_dir("rename_taken");
+        let to = voice_id_from_name("芳乃");
+        std::fs::create_dir_all(references.join("芳乃")).unwrap();
+        std::fs::write(references.join("芳乃").join("clip.wav"), b"old").unwrap();
+        std::fs::create_dir_all(references.join(&to)).unwrap();
+        std::fs::write(references.join(&to).join("clip.wav"), b"new").unwrap();
+
+        assert!(rename_user_voice_at(&references, "芳乃", &to).is_err());
+
+        assert_eq!(
+            std::fs::read(references.join("芳乃").join("clip.wav")).unwrap(),
+            b"old"
+        );
+        assert_eq!(
+            std::fs::read(references.join(&to).join("clip.wav")).unwrap(),
+            b"new"
+        );
+        std::fs::remove_dir_all(&references).ok();
+    }
+
+    #[test]
+    fn rename_at_completes_a_rename_whose_folder_already_moved() {
+        let references = unique_dir("rename_retry");
+        let to = voice_id_from_name("希");
+        std::fs::create_dir_all(references.join(&to)).unwrap();
+        std::fs::write(references.join(&to).join("clip.mp3"), b"clip").unwrap();
+
+        let renamed = rename_user_voice_at(&references, "希", &to).unwrap();
+
+        assert_eq!(
+            PathBuf::from(&renamed.ref_path),
+            references.join(&to).join("clip.mp3")
+        );
+        std::fs::remove_dir_all(&references).ok();
     }
 
     // ── sweep_stale_import_artifacts: startup recovery for the unclosed rename window ────────
