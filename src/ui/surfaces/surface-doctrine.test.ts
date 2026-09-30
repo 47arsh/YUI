@@ -142,14 +142,24 @@ describe("history-section.css — a single separator above the start-fresh foote
 
 // A class-level `display` outranks the UA [hidden] rule, so every such component
 // has to restate [hidden] itself or the attribute silently stops hiding it.
-describe("quick-controls.css — components with a display rule honour [hidden]", () => {
+describe("controls.css — components with a display rule honour [hidden]", () => {
   for (const selector of [".yui-link-btn", ".yui-confirm"]) {
     it(`${selector} sets display:none under [hidden]`, () => {
-      const css = read("../quick-controls/quick-controls.css");
+      const css = read("../quick-controls/controls.css");
       expect(extractBlock(css, selector)).toMatch(/display:/);
       expect(extractBlock(css, `${selector}[hidden]`)).toMatch(/display:\s*none/);
     });
   }
+});
+
+// The panel's controls live in controls.css; quick-controls.css keeps the shell, rail, body and rows.
+describe("quick-controls.css — holds no control rules", () => {
+  it("styles no switch, segment, slider or select", () => {
+    const css = read("../quick-controls/quick-controls.css");
+    for (const selector of [".yui-switch", ".yui-seg", ".yui-gain__slider", ".yui-select"]) {
+      expect(css).not.toContain(selector);
+    }
+  });
 });
 
 // Same rule on the quick-controls endpoints section: the chat-status line and the
