@@ -5,7 +5,7 @@
 ```bash
 pnpm install
 pnpm dev                    # Vite dev server (fixed port 1420) — browser only
-pnpm tauri dev              # Tauri app (fixed port 1420, transparent pet window)
+pnpm tauri dev              # Tauri app (fixed port 1420, transparent pet window; both Tauri routes open http://127.0.0.1:<port>, so they share one localStorage origin)
 pnpm dev:auto               # Vite dev server, browser only — auto-picks a free port from 1420 up (or honors YUI_DEV_PORT)
 pnpm tauri:dev              # Tauri app — auto-picks a free port from 1420 up (or honors YUI_DEV_PORT); enables concurrent worktrees
 pnpm build                  # tsc + vite build
