@@ -100,6 +100,8 @@ respond.
 ## Documentation
 
 - [Feature list](docs/guide/features.md)
+- [Controls](docs/guide/controls.md): keyboard, mouse, and tray
+- [What she can do](docs/guide/capabilities.md)
 - [Install with a coding agent](docs/guide/install.md)
 - [Install and wiring guide](docs/guide/getting-started.md): chat backend, Expression Broker, TTS, STT, your own VRM
 - [Build, run, and logs](docs/agent-guide/build-run.md)
