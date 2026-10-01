@@ -1,16 +1,14 @@
 //! Bring-your-own-VRM import (native half).
 //!
-//! Copies a user-picked `.vrm` from an arbitrary path into `<app_data_dir>/vrms/`
-//! via a native command. A native `std::fs::copy` reads the arbitrary source with
-//! the app's own privileges — the fs plugin would require the source path to be in
-//! a pre-declared scope, which an OS file picker cannot satisfy.
+//! Streams a user-picked `.vrm` into `<app_data_dir>/vrms/` through the fs plugin, which opens a
+//! plain path on desktop and a content URI on Android. The source needs no pre-declared scope,
+//! which an OS file picker cannot satisfy.
 
-use crate::import_fs::{
-    collides, derive_dest_stem, ensure_within, sanitize_stem, sniff_file, SniffKind,
-};
+use crate::import_fs::{copy_bounded, dest_stem_candidates, ensure_within, sanitize_stem};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::{command, AppHandle, Manager};
+use tauri_plugin_fs::{FilePath, FsExt, OpenOptions as FsOpenOptions};
 
 /// Max accepted source size for a VRM import.
 const MAX_VRM_BYTES: u64 = 512 * 1024 * 1024;
@@ -25,15 +23,21 @@ pub struct ImportedVrm {
     pub dest_path: String,
 }
 
-/// Copy a validated `.vrm` source into `vrms_dir`, disambiguating the dest stem.
-fn copy_into_vrms(vrms_dir: &Path, src: &Path) -> Result<ImportedVrm, String> {
-    let src = src
-        .canonicalize()
-        .map_err(|_| "source file not found".to_string())?;
-    if !src.is_file() {
-        return Err("source file not found".to_string());
-    }
-    if src
+/// Stream a validated `.vrm` into `vrms_dir` under the first free, non-reserved stem. `identity`
+/// (the source path or URI) seeds the disambiguating hash; `name` is the source's display name.
+fn import_into(
+    vrms_dir: &Path,
+    name: Option<&str>,
+    identity: &str,
+    reserved: &[String],
+    mut reader: impl std::io::Read,
+    cap: u64,
+) -> Result<ImportedVrm, String> {
+    let name = name
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| "source name unavailable".to_string())?;
+    let name = Path::new(name);
+    if name
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("vrm"))
@@ -41,16 +45,7 @@ fn copy_into_vrms(vrms_dir: &Path, src: &Path) -> Result<ImportedVrm, String> {
     {
         return Err("not a .vrm file".to_string());
     }
-    if std::fs::metadata(&src)
-        .map_err(|_| "source file not found".to_string())?
-        .len()
-        > MAX_VRM_BYTES
-    {
-        return Err("source file too large".to_string());
-    }
-    if !sniff_file(&src, SniffKind::Glb)? {
-        return Err("not a .vrm file".to_string());
-    }
+    let name_stem = name.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
     std::fs::create_dir_all(vrms_dir).map_err(|e| {
         log::error!(
@@ -60,21 +55,32 @@ fn copy_into_vrms(vrms_dir: &Path, src: &Path) -> Result<ImportedVrm, String> {
         "storage unavailable".to_string()
     })?;
 
-    let stem = derive_dest_stem(&src, |candidate| {
-        collides(&vrms_dir.join(format!("{candidate}.vrm")))
-    });
-    let dest = vrms_dir.join(format!("{stem}.vrm"));
-    ensure_within(vrms_dir, &dest)?;
-
-    std::fs::copy(&src, &dest).map_err(|e| {
-        log::error!("copy_failed dest={} error={e}", dest.display());
-        "import failed".to_string()
-    })?;
-
-    Ok(ImportedVrm {
-        id: stem,
-        dest_path: dest.to_string_lossy().into_owned(),
-    })
+    for stem in dest_stem_candidates(name_stem, identity, reserved) {
+        let dest = vrms_dir.join(format!("{stem}.vrm"));
+        ensure_within(vrms_dir, &dest)?;
+        // create_new claims the stem atomically, so concurrent imports never share a dest.
+        let file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&dest)
+        {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => {
+                log::error!("create_dest_failed dest={} error={e}", dest.display());
+                return Err("import failed".to_string());
+            }
+        };
+        if let Err(e) = copy_bounded(&mut reader, file, cap) {
+            let _ = std::fs::remove_file(&dest);
+            return Err(e);
+        }
+        return Ok(ImportedVrm {
+            id: stem,
+            dest_path: dest.to_string_lossy().into_owned(),
+        });
+    }
+    Err("import failed".to_string())
 }
 
 /// Delete `vrms_dir/<sanitized id>.vrm` if present. Idempotent — missing is Ok.
@@ -93,32 +99,54 @@ fn remove_user_vrm_at(vrms_dir: &Path, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Copy a user-picked `.vrm` into `<app_data_dir>/vrms/`, returning its id + dest path.
-#[command]
-pub fn import_vrm_file(app: AppHandle, src_path: String) -> Result<ImportedVrm, String> {
-    let vrms_dir = app
-        .path()
+fn vrms_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
         .app_data_dir()
+        .map(|dir| dir.join("vrms"))
         .map_err(|e| {
             log::error!("app_data_dir_unavailable error={e}");
             "storage unavailable".to_string()
-        })?
-        .join("vrms");
-    copy_into_vrms(&vrms_dir, &PathBuf::from(&src_path))
+        })
+}
+
+/// Stream a user-picked `.vrm` (a path or a content URI) into `<app_data_dir>/vrms/`, returning
+/// its id + dest path. `reserved_ids` are ids the import must not take.
+#[command]
+pub async fn import_vrm_file(
+    app: AppHandle,
+    src_path: FilePath,
+    reserved_ids: Vec<String>,
+) -> Result<ImportedVrm, String> {
+    let vrms_dir = vrms_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let identity = src_path.to_string();
+        let name = app.path().file_name(&identity);
+        let mut opts = FsOpenOptions::new();
+        opts.read(true);
+        let source = app.fs().open(src_path, opts).map_err(|e| {
+            log::error!("open_source_failed error={e}");
+            "source file not found".to_string()
+        })?;
+        import_into(
+            &vrms_dir,
+            name.as_deref(),
+            &identity,
+            &reserved_ids,
+            source,
+            MAX_VRM_BYTES,
+        )
+    })
+    .await
+    .map_err(|e| {
+        log::error!("import_task_failed error={e}");
+        "import failed".to_string()
+    })?
 }
 
 /// Delete `<app_data_dir>/vrms/<id>.vrm` if present. Idempotent — missing is Ok.
 #[command]
 pub fn remove_user_vrm(app: AppHandle, id: String) -> Result<(), String> {
-    let vrms_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| {
-            log::error!("app_data_dir_unavailable error={e}");
-            "storage unavailable".to_string()
-        })?
-        .join("vrms");
-    remove_user_vrm_at(&vrms_dir, &id)
+    remove_user_vrm_at(&vrms_dir(&app)?, &id)
 }
 
 #[cfg(test)]
@@ -168,86 +196,128 @@ mod tests {
         std::fs::remove_dir_all(&vrms).ok();
     }
 
-    #[test]
-    fn copy_into_rejects_oversized_source() {
-        let dir = unique_dir("oversize");
-        let src = dir.join("big.vrm");
-        // Sparse file larger than the cap, without writing the bytes.
-        let f = std::fs::File::create(&src).unwrap();
-        f.set_len(MAX_VRM_BYTES + 1).unwrap();
-        drop(f);
-        let err = copy_into_vrms(&dir.join("dest"), Path::new(&src));
-        assert!(err.is_err(), "oversized source must be rejected");
-        std::fs::remove_dir_all(&dir).ok();
+    const GLB: &[u8] = b"glTF\x02\x00\x00\x00binary chunk";
+
+    fn import(
+        vrms: &Path,
+        name: Option<&str>,
+        reserved: &[&str],
+        bytes: &[u8],
+    ) -> Result<ImportedVrm, String> {
+        let reserved: Vec<String> = reserved.iter().map(|s| s.to_string()).collect();
+        import_into(
+            vrms,
+            name,
+            "content://media/external/file/42",
+            &reserved,
+            bytes,
+            1024,
+        )
+    }
+
+    fn leftovers(vrms: &Path) -> Vec<String> {
+        std::fs::read_dir(vrms)
+            .map(|d| {
+                d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     #[test]
-    fn copy_into_disambiguates_on_existing_dest() {
-        let dir = unique_dir("collide");
-        let vrms = dir.join("vrms");
-        std::fs::create_dir_all(&vrms).unwrap();
-        std::fs::write(vrms.join("Cat.vrm"), b"existing").unwrap();
-        let src = dir.join("Cat.vrm");
-        // Valid GLB magic so the disambiguation path is reached, not the sniff gate.
-        std::fs::write(&src, b"glTF\x02\x00\x00\x00new bytes").unwrap();
-
-        let imported = copy_into_vrms(&vrms, Path::new(&src)).unwrap();
-        assert_ne!(imported.id, "Cat", "must not overwrite the existing dest");
-        assert!(vrms.join("Cat.vrm").exists());
-        std::fs::remove_dir_all(&dir).ok();
+    fn import_into_copies_a_valid_stream_under_its_stem() {
+        let vrms = unique_dir("good").join("vrms");
+        let imported = import(&vrms, Some("real.vrm"), &[], GLB).unwrap();
+        assert_eq!(imported.id, "real");
+        assert_eq!(std::fs::read(vrms.join("real.vrm")).unwrap(), GLB);
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
     }
 
     #[test]
-    fn copy_into_rejects_bogus_magic_and_copies_nothing() {
-        let dir = unique_dir("bad_magic");
-        let vrms = dir.join("vrms");
-        let src = dir.join("fake.vrm");
-        std::fs::write(&src, b"%PDF-1.4 not a vrm at all").unwrap();
+    fn import_into_needs_a_display_name() {
+        let vrms = unique_dir("noname").join("vrms");
+        assert!(import(&vrms, None, &[], GLB).is_err());
+        assert!(leftovers(&vrms).is_empty());
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
+    }
 
-        let res = copy_into_vrms(&vrms, Path::new(&src));
-        assert!(res.is_err(), "non-GLB content must be rejected");
+    #[test]
+    fn import_into_rejects_a_name_without_the_vrm_extension() {
+        let vrms = unique_dir("ext").join("vrms");
+        assert!(import(&vrms, Some("model.glb"), &[], GLB).is_err());
+        assert!(leftovers(&vrms).is_empty());
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn import_into_rejects_bad_magic_and_leaves_no_file() {
+        let vrms = unique_dir("bad_magic").join("vrms");
+        assert!(import(&vrms, Some("fake.vrm"), &[], b"%PDF-1.4 not a vrm at all").is_err());
         assert!(
-            !vrms.join("fake.vrm").exists(),
+            leftovers(&vrms).is_empty(),
             "no partial copy on sniff failure"
         );
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
     }
 
     #[test]
-    fn copy_into_accepts_valid_glb_magic() {
-        let dir = unique_dir("good_magic");
-        let vrms = dir.join("vrms");
-        let src = dir.join("real.vrm");
-        std::fs::write(&src, b"glTF\x02\x00\x00\x00binary chunk").unwrap();
-
-        let imported = copy_into_vrms(&vrms, Path::new(&src)).unwrap();
-        assert_eq!(imported.id, "real");
-        assert!(vrms.join("real.vrm").exists());
-        std::fs::remove_dir_all(&dir).ok();
+    fn import_into_removes_the_partial_file_when_the_stream_exceeds_the_cap() {
+        let vrms = unique_dir("oversize").join("vrms");
+        let mut big = GLB.to_vec();
+        big.extend(std::iter::repeat_n(7u8, 4096));
+        let err = import_into(&vrms, Some("big.vrm"), "id", &[], &big[..], 64);
+        assert!(err.is_err(), "oversized stream must be rejected");
+        assert!(leftovers(&vrms).is_empty(), "partial copy must be removed");
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
     }
 
     #[test]
-    fn copy_into_keeps_a_utf8_filename_stem_verbatim() {
-        // Relaxed sanitize_stem (import_fs) now passes UTF-8 through instead of mangling it —
-        // a non-ASCII VRM filename registers under its real name instead of "____".
-        let dir = unique_dir("utf8_stem");
-        let vrms = dir.join("vrms");
-        let src = dir.join("ナツメ.vrm");
-        std::fs::write(&src, b"glTF\x02\x00\x00\x00binary chunk").unwrap();
+    fn import_into_moves_to_the_next_stem_on_an_existing_dest() {
+        let vrms = unique_dir("collide").join("vrms");
+        std::fs::create_dir_all(&vrms).unwrap();
+        std::fs::write(vrms.join("Cat.vrm"), b"existing").unwrap();
+        let imported = import(&vrms, Some("Cat.vrm"), &[], GLB).unwrap();
+        assert_ne!(imported.id, "Cat");
+        assert_eq!(std::fs::read(vrms.join("Cat.vrm")).unwrap(), b"existing");
+        assert_eq!(
+            std::fs::read(vrms.join(format!("{}.vrm", imported.id))).unwrap(),
+            GLB
+        );
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
+    }
 
-        let imported = copy_into_vrms(&vrms, Path::new(&src)).unwrap();
+    #[test]
+    fn import_into_gives_a_reserved_bundled_id_a_different_stem() {
+        let vrms = unique_dir("reserved").join("vrms");
+        let imported = import(
+            &vrms,
+            Some("Sendagaya_Shino.vrm"),
+            &["Sendagaya_Shino"],
+            GLB,
+        )
+        .unwrap();
+        assert_ne!(imported.id, "Sendagaya_Shino");
+        assert!(!vrms.join("Sendagaya_Shino.vrm").exists());
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn import_into_keeps_a_utf8_filename_stem_verbatim() {
+        let vrms = unique_dir("utf8_stem").join("vrms");
+        let imported = import(&vrms, Some("ナツメ.vrm"), &[], GLB).unwrap();
         assert_eq!(imported.id, "ナツメ");
         assert!(vrms.join("ナツメ.vrm").exists());
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
     }
 
     #[test]
-    fn copy_into_errors_carry_no_path_separators() {
-        let dir = unique_dir("err_generic");
-        let src = dir.join("fake.vrm");
-        std::fs::write(&src, b"not a vrm").unwrap();
-        let err = copy_into_vrms(&dir.join("vrms"), Path::new(&src)).unwrap_err();
-        assert!(!err.contains('/'), "error must not leak a path: {err:?}");
-        std::fs::remove_dir_all(&dir).ok();
+    fn import_into_errors_carry_no_path_separators() {
+        let vrms = unique_dir("err_generic").join("vrms");
+        let err = import(&vrms, Some("fake.vrm"), &[], b"not a vrm").unwrap_err();
+        assert!(
+            !err.contains('/'),
+            "error must not leak a path or URI: {err:?}"
+        );
+        std::fs::remove_dir_all(vrms.parent().unwrap()).ok();
     }
 }

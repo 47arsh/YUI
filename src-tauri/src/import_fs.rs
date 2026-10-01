@@ -1,7 +1,7 @@
-//! Shared import filesystem helpers — sanitize, hash, derive stem, collision
-//! check, and container-signature sniffing.
+//! Shared import filesystem helpers — sanitize, hash, dest stem candidates, bounded streamed
+//! copy, and container-signature sniffing.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 /// Container kinds we content-validate before copying an imported file.
@@ -204,38 +204,67 @@ pub(crate) fn short_hash(s: &str) -> String {
     format!("{:x}", h & 0xffffff)
 }
 
-/// Derive the dest filename stem from a source path, disambiguating on collision.
-/// `taken(stem)` reports whether `stem` is already claimed by an existing dest.
-pub(crate) fn derive_dest_stem(src: &Path, taken: impl Fn(&str) -> bool) -> String {
-    let raw = src.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let base = sanitize_stem(raw);
-    if !taken(&base) {
-        return base;
-    }
-    let suffixed = format!("{}-{}", base, short_hash(&src.to_string_lossy()));
-    if !taken(&suffixed) {
-        return suffixed;
-    }
-    // Last resort: numeric walk.
-    for n in 2.. {
-        let candidate = format!("{}-{}", base, n);
-        if !taken(&candidate) {
-            return candidate;
-        }
-    }
-    unreachable!()
+/// Candidate dest stems in claim order: the sanitized name, the name with a hash of the source
+/// identity, then a numeric walk. Reserved ids are skipped; the caller claims a stem by creating
+/// its file and moves to the next candidate when it already exists.
+pub(crate) fn dest_stem_candidates<'a>(
+    name_stem: &str,
+    identity: &str,
+    reserved: &'a [String],
+) -> impl Iterator<Item = String> + 'a {
+    let base = sanitize_stem(name_stem);
+    let hashed = format!("{base}-{}", short_hash(identity));
+    let numbered = {
+        let base = base.clone();
+        (2..).map(move |n| format!("{base}-{n}"))
+    };
+    [base, hashed]
+        .into_iter()
+        .chain(numbered)
+        .filter(move |c| !reserved.contains(c))
 }
 
-/// True when `dest` already exists — any existing dest is a collision, so the
-/// caller must disambiguate rather than overwrite.
-pub(crate) fn collides(dest: &Path) -> bool {
-    dest.exists()
+/// Stream a GLB from `reader` into `writer`, reading at most `cap + 1` bytes. The first bytes are
+/// checked for the GLB magic before anything is written; the stream is rejected when it carries
+/// more than `cap` bytes. Errors are generic; the caller removes the partial destination.
+pub(crate) fn copy_bounded(
+    reader: impl Read,
+    mut writer: impl Write,
+    cap: u64,
+) -> Result<u64, String> {
+    let mut reader = reader.take(cap.saturating_add(1));
+    let mut header = [0u8; SNIFF_HEADER_LEN];
+    let mut filled = 0;
+    while filled < header.len() {
+        match reader.read(&mut header[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => {
+                log::warn!("copy_read_failed error={e}");
+                return Err("source file not found".to_string());
+            }
+        }
+    }
+    if !sniff_ok(&header[..filled], SniffKind::Glb) {
+        return Err("not a .vrm file".to_string());
+    }
+    let fail = |e: std::io::Error| {
+        log::error!("copy_failed error={e}");
+        "import failed".to_string()
+    };
+    writer.write_all(&header[..filled]).map_err(fail)?;
+    let rest = std::io::copy(&mut reader, &mut writer).map_err(fail)?;
+    let total = filled as u64 + rest;
+    if total > cap {
+        return Err("source file too large".to_string());
+    }
+    Ok(total)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     /// A safe stem can never be empty, `.`, `..`, contain a path separator, a Windows-illegal
     /// character, an ASCII control char, or carry a leading/trailing dot or whitespace —
@@ -465,57 +494,128 @@ mod tests {
         assert!(ensure_within(&parent, &sibling).is_err());
     }
 
-    // ── derive_dest_stem ─────────────────────────────────────────────────────
+    // ── dest_stem_candidates ─────────────────────────────────────────────────
+
+    fn first_n(name: &str, identity: &str, reserved: &[String], n: usize) -> Vec<String> {
+        dest_stem_candidates(name, identity, reserved)
+            .take(n)
+            .collect()
+    }
 
     #[test]
-    fn derive_uses_sanitized_stem_when_no_collision() {
-        let src = PathBuf::from("/Users/me/Downloads/My Avatar.vrm");
-        let stem = derive_dest_stem(&src, |_| false);
+    fn candidates_start_with_the_sanitized_name_stem() {
         // Interior spaces are kept by the relaxed sanitize_stem — only traversal/illegal chars are neutralized.
-        assert_eq!(stem, "My Avatar");
+        assert_eq!(first_n("My Avatar", "/x/y", &[], 1), ["My Avatar"]);
     }
 
     #[test]
-    fn derive_disambiguates_on_any_existing_dest() {
-        let src = PathBuf::from("/a/b/Cat.vrm");
-        let stem = derive_dest_stem(&src, |candidate| candidate == "Cat");
-        assert_ne!(stem, "Cat");
-        assert!(stem.starts_with("Cat"));
-        assert!(is_safe_stem(&stem));
+    fn candidates_follow_base_then_hash_then_numeric_walk() {
+        let c = first_n("Cat", "/a/b/Cat.vrm", &[], 4);
+        assert_eq!(c[0], "Cat");
+        assert_eq!(c[1], format!("Cat-{}", short_hash("/a/b/Cat.vrm")));
+        assert_eq!(c[2], "Cat-2");
+        assert_eq!(c[3], "Cat-3");
+        assert!(c.iter().all(|s| is_safe_stem(s)));
     }
 
     #[test]
-    fn derive_is_deterministic_for_a_given_src_path() {
-        let src = PathBuf::from("/a/b/Cat.vrm");
-        let a = derive_dest_stem(&src, |c| c == "Cat");
-        let b = derive_dest_stem(&src, |c| c == "Cat");
-        assert_eq!(a, b);
+    fn candidates_skip_reserved_ids() {
+        let reserved = vec!["Cat".to_string(), "Cat-2".to_string()];
+        let c = first_n("Cat", "/a/b/Cat.vrm", &reserved, 2);
+        assert!(!c.contains(&"Cat".to_string()));
+        assert!(!c.contains(&"Cat-2".to_string()));
+        assert_eq!(c[0], format!("Cat-{}", short_hash("/a/b/Cat.vrm")));
+        assert_eq!(c[1], "Cat-3");
     }
 
     #[test]
-    fn derive_distinct_src_paths_disambiguate_differently() {
-        let src1 = PathBuf::from("/dir-one/Cat.vrm");
-        let src2 = PathBuf::from("/dir-two/Cat.vrm");
-        let a = derive_dest_stem(&src1, |c| c == "Cat");
-        let b = derive_dest_stem(&src2, |c| c == "Cat");
-        assert_ne!(a, b);
+    fn candidates_use_the_identity_for_disambiguation_only() {
+        let a = first_n("Cat", "content://x/1", &[], 2);
+        let b = first_n("Cat", "content://x/2", &[], 2);
+        assert_eq!(a[0], b[0]);
+        assert_ne!(a[1], b[1]);
     }
 
-    // ── collides ─────────────────────────────────────────────────────────────
+    // ── copy_bounded ─────────────────────────────────────────────────────────
+
+    /// A reader that yields one byte per call.
+    struct OneByte<'a>(&'a [u8]);
+
+    impl Read for OneByte<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.split_first() {
+                Some((b, rest)) if !buf.is_empty() => {
+                    buf[0] = *b;
+                    self.0 = rest;
+                    Ok(1)
+                }
+                _ => Ok(0),
+            }
+        }
+    }
+
+    struct FailingWriter;
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("disk full"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    const GLB: &[u8] = b"glTF\x02\x00\x00\x00binary chunk of the model";
 
     #[test]
-    fn collides_is_false_when_dest_absent() {
-        let dest = std::env::temp_dir().join("yui_collides_absent_xyz.vrm");
-        let _ = std::fs::remove_file(&dest);
-        assert!(!collides(&dest));
+    fn copy_bounded_copies_a_glb_stream_under_the_cap() {
+        let mut out = Vec::new();
+        let n = copy_bounded(GLB, &mut out, 1024).unwrap();
+        assert_eq!(n, GLB.len() as u64);
+        assert_eq!(out, GLB);
     }
 
     #[test]
-    fn collides_is_true_for_any_existing_dest_regardless_of_length() {
-        let dest = std::env::temp_dir().join("yui_collides_present.vrm");
-        std::fs::write(&dest, b"any bytes").unwrap();
-        assert!(collides(&dest));
-        let _ = std::fs::remove_file(&dest);
+    fn copy_bounded_accepts_exactly_the_cap_and_rejects_one_over() {
+        let mut out = Vec::new();
+        assert!(copy_bounded(GLB, &mut out, GLB.len() as u64).is_ok());
+        let mut out = Vec::new();
+        assert!(copy_bounded(GLB, &mut out, GLB.len() as u64 - 1).is_err());
+    }
+
+    #[test]
+    fn copy_bounded_stops_reading_past_the_cap() {
+        let mut data = GLB.to_vec();
+        data.extend(std::iter::repeat_n(0u8, 10_000));
+        let mut out = Vec::new();
+        assert!(copy_bounded(&data[..], &mut out, 64).is_err());
+        assert!(out.len() <= 65, "wrote {} bytes past the cap", out.len());
+    }
+
+    #[test]
+    fn copy_bounded_rejects_bad_magic_without_writing() {
+        let mut out = Vec::new();
+        assert!(copy_bounded(&b"%PDF-1.4 not a vrm at all"[..], &mut out, 1024).is_err());
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn copy_bounded_rejects_a_stream_shorter_than_the_magic() {
+        let mut out = Vec::new();
+        assert!(copy_bounded(&b"gl"[..], &mut out, 1024).is_err());
+    }
+
+    #[test]
+    fn copy_bounded_handles_one_byte_reads() {
+        let mut out = Vec::new();
+        let n = copy_bounded(OneByte(GLB), &mut out, 1024).unwrap();
+        assert_eq!(n, GLB.len() as u64);
+        assert_eq!(out, GLB);
+    }
+
+    #[test]
+    fn copy_bounded_surfaces_a_write_error() {
+        assert!(copy_bounded(GLB, FailingWriter, 1024).is_err());
     }
 
     // ── short_hash ───────────────────────────────────────────────────────────
