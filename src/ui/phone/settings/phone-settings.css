@@ -178,3 +178,20 @@
 .yui-phone-settings .yui-vrm__remove.is-armed {
   height: 2.25rem;
 }
+
+/* General tab: the stage segment spans its row, and its buttons and the Choose button reach the
+   touch target. */
+.yui-phone-settings .yui-row > .yui-stage-seg {
+  flex: 1 1 auto;
+}
+
+.yui-phone-settings .yui-stage-seg .yui-seg__btn,
+.yui-phone-settings .yui-stage-choose {
+  min-height: var(--yui-touch);
+}
+
+/* The rail keeps its tabs together; the desktop panel's bottom-pinned General tab sits right
+   under History here. */
+.yui-phone-settings #yui-tab-general {
+  margin-top: 0;
+}
