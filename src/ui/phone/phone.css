@@ -24,6 +24,68 @@ body {
   touch-action: none;
 }
 
+/* ── Top row — plate, delegation chip, and the pill centred beneath; inside the safe area
+   `.yui-root` already provides. Sits above the absolute stage and surfaces. ── */
+.yui-phone__head {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.yui-phone__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px 0 12px;
+}
+
+/* The pill drops its character-window placing and centres in the column. */
+.yui-phone .yui-status {
+  position: static;
+  align-self: center;
+  transform: none;
+}
+
+/* The chip rides the row instead of the character's shoulder; the absolute list anchors to the
+   head, which spans the screen and holds it on screen. */
+.yui-phone .yui-deleg {
+  position: static;
+  min-width: 0;
+  padding-left: 0;
+  transform: none;
+}
+
+/* Plate label and chip text give way before the 360px row overflows. */
+.yui-phone .yui-plate {
+  min-width: 0;
+}
+.yui-phone .yui-plate__state {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.yui-phone .yui-deleg__chip {
+  position: relative;
+  min-width: 0;
+}
+.yui-phone .yui-deleg__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 48px touch target around the chip button, without resizing it. */
+.yui-phone .yui-deleg__chip::after {
+  content: "";
+  position: absolute;
+  inset: -11px;
+}
+
 .yui-phone .yui-input {
   width: calc(100% - 20px);
   border-radius: 24px;
@@ -64,6 +126,14 @@ body {
 .yui-phone .yui-bubble__tools button:active {
   background: var(--yui-accent-faint);
   color: var(--yui-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The reduced-motion !important transform is a character-window placing. */
+  .yui-phone .yui-status,
+  .yui-phone .yui-status.is-visible {
+    transform: none !important;
+  }
 }
 
 .yui-phone .yui-input__btn,
