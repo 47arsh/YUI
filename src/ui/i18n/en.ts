@@ -22,6 +22,9 @@ const en: Record<string, string> = {
   // the one voice failure the settings panel resolves — the chip becomes the fix
   "voice.error.not_configured": "Setup needed",
   "voice.error.not_configured_fix": "backend not configured. Open Connection settings",
+  "voice.error.mic_denied": "Mic blocked",
+  "voice.error.no_mic": "No mic",
+  "voice.error.mic_unavailable": "Mic unavailable",
 
   // aria labels (parameterized)
   "aria.refresh_speaker": "Refresh {name} reference voice",
@@ -47,6 +50,13 @@ const en: Record<string, string> = {
   // phone top-row openers
   "phone.open_history": "Conversation history",
   "phone.open_settings": "Settings",
+  "phone.voice.start_aria": "Start voice input",
+  "phone.voice.stop_aria": "Stop voice input",
+  "phone.voice.section": "Voice input",
+  "phone.voice.mode_tap": "Tap to toggle",
+  "phone.voice.mode_always": "Keep listening",
+  "phone.voice.mode_aria": "Voice input mode",
+  "phone.voice.note": "Keep listening runs while YUI is open and stops in the background.",
   "phone.general.stage_section": "Stage",
   "phone.general.bubble_section": "Speech bubble",
   "phone.general.stage_aria": "Stage background",

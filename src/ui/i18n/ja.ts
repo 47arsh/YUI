@@ -21,6 +21,9 @@ const ja: Record<string, string> = {
   "voice.state.error": "エラー",
   "voice.error.not_configured": "設定が必要",
   "voice.error.not_configured_fix": "バックエンド未設定。接続設定を開く",
+  "voice.error.mic_denied": "マイク拒否",
+  "voice.error.no_mic": "マイクなし",
+  "voice.error.mic_unavailable": "マイク使用不可",
 
   // aria labels (parameterized)
   "aria.refresh_speaker": "{name} の参照音声を更新",
@@ -46,6 +49,13 @@ const ja: Record<string, string> = {
   // phone top-row openers
   "phone.open_history": "会話履歴",
   "phone.open_settings": "設定",
+  "phone.voice.start_aria": "音声入力を開始",
+  "phone.voice.stop_aria": "音声入力を停止",
+  "phone.voice.section": "音声入力",
+  "phone.voice.mode_tap": "タップで切り替え",
+  "phone.voice.mode_always": "聞き続ける",
+  "phone.voice.mode_aria": "音声入力の方式",
+  "phone.voice.note": "聞き続けるはYUIを開いている間だけ動作し、バックグラウンドでは停止します。",
   "phone.general.stage_section": "ステージ",
   "phone.general.bubble_section": "吹き出し",
   "phone.general.stage_aria": "ステージの背景",

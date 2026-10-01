@@ -8,6 +8,7 @@
 import type { AttachmentLimits } from "../../config/load";
 import type { InputErrorAction } from "../../io/bridge/message-remote";
 import { subscribe as subscribeLocale, t } from "../i18n";
+import { type ActionButton, createActionButton, type MicPort } from "./action-button";
 import { downscaleToJpeg } from "./image-resize";
 
 interface TextInput {
@@ -67,7 +68,7 @@ export function createTextInput(
   { formEl, field, errorEl, trayEl, attachBtn, picker, sendBtn }: TextInputElements,
   bubble: TextInputBubbleAnchor,
   onOpenChange?: (open: boolean) => void,
-  options?: { persistentInput?: boolean },
+  options?: { persistentInput?: boolean; mic?: MicPort },
 ): TextInput {
   // Always shown, never summoned or dismissed: the button sends and Enter is a newline.
   const persistent = options?.persistentInput ?? false;
@@ -85,6 +86,15 @@ export function createTextInput(
   let busy = false;
   // Input bottom offset (px) — updated by setInputAnchor, used to lift the bubble while the input is open.
   let inputBottomPx = DEFAULT_INPUT_BOTTOM_PX;
+  const actionButton: ActionButton = createActionButton({
+    button: sendBtn,
+    busy: () => busy,
+    hasContent: () => field.value.trim() !== "" || attachments.length > 0 || inFlight > 0,
+    mic: options?.mic,
+    onStop: () => {
+      for (const cb of stopHandlers) cb();
+    },
+  });
 
   // While the input is open, lift the bubble above it to prevent overlap.
   // Bubble bottom = input bottom + input height + gap. Even if the feet anchor changes each frame,
@@ -205,6 +215,7 @@ export function createTextInput(
     inFlight = 0;
     epoch++;
     trayEl.replaceChildren();
+    actionButton.refresh();
     if (!formEl.hidden) liftBubbleAboveInput();
   }
 
@@ -229,6 +240,7 @@ export function createTextInput(
         continue;
       }
       inFlight++;
+      actionButton.refresh();
       const batch = epoch;
       void downscaleToJpeg(file)
         .then((url) => {
@@ -237,7 +249,9 @@ export function createTextInput(
           addChip(url);
         })
         .finally(() => {
-          if (batch === epoch) inFlight--;
+          if (batch !== epoch) return;
+          inFlight--;
+          actionButton.refresh();
         });
     }
   }
@@ -260,10 +274,12 @@ export function createTextInput(
       const idx = Array.from(trayEl.children).indexOf(chip);
       if (idx !== -1) attachments.splice(idx, 1);
       chip.remove();
+      actionButton.refresh();
       if (!formEl.hidden) liftBubbleAboveInput();
     });
     chip.append(img, remove);
     trayEl.append(chip);
+    actionButton.refresh();
     if (!formEl.hidden) liftBubbleAboveInput();
   }
 
@@ -277,16 +293,15 @@ export function createTextInput(
     // A turn reaching the backend falsifies a standing error, whatever source started it.
     if (value) clearInputError();
     formEl.classList.toggle("is-running", value);
-    sendBtn.setAttribute("aria-label", value ? t("aria.stop") : t("aria.send"));
+    actionButton.refresh();
   }
 
-  // Single site for these four labels — applied here at construction, and again by
+  // Single site for the static labels — applied here at construction, and again by
   // the same function on locale change (surfaces isn't remounted on locale change).
   function applyLocaleLabels(): void {
     attachBtn.setAttribute("aria-label", t("aria.attach_image"));
     field.placeholder = t("input.placeholder");
     field.setAttribute("aria-label", t("aria.input_field"));
-    sendBtn.setAttribute("aria-label", busy ? t("aria.stop") : t("aria.send"));
   }
   applyLocaleLabels();
   const unsubscribeLocale = subscribeLocale(applyLocaleLabels);
@@ -308,12 +323,14 @@ export function createTextInput(
     for (const cb of submitHandlers) cb(text, images);
     clearAttachments();
     field.value = "";
+    actionButton.refresh();
     fitField();
   }
 
   function restoreInput(text: string, images: string[]): void {
     if (!isInputOpen() || field.value !== "" || attachments.length > 0 || inFlight > 0) return;
     field.value = text;
+    actionButton.refresh();
     for (const url of images) {
       attachments.push(url);
       addChip(url);
@@ -321,21 +338,9 @@ export function createTextInput(
     fitField();
   }
 
-  // A button takes focus on click in Chromium and the Android WebView, which closes the soft keyboard; the field keeps it.
-  function keepFieldFocus(e: Event): void {
-    e.preventDefault();
-  }
-
   function handleSubmit(e: Event): void {
     e.preventDefault();
     submitCurrent();
-  }
-
-  // Button click while busy = stop (intercepts submit). When idle, passes through as type=submit.
-  function handleSendClick(e: Event): void {
-    if (!busy) return;
-    e.preventDefault();
-    for (const cb of stopHandlers) cb();
   }
 
   function handleFieldKey(e: KeyboardEvent): void {
@@ -398,11 +403,10 @@ export function createTextInput(
   }
 
   formEl.addEventListener("submit", handleSubmit);
-  sendBtn.addEventListener("click", handleSendClick);
-  sendBtn.addEventListener("mousedown", keepFieldFocus);
   field.addEventListener("keydown", handleFieldKey);
   field.addEventListener("input", clearErrorOnInput);
   field.addEventListener("input", fitField);
+  field.addEventListener("input", actionButton.refresh);
   field.addEventListener("paste", onFieldPaste);
   attachBtn.addEventListener("click", onAttachClick);
   picker.addEventListener("change", onPickerChange);
@@ -413,11 +417,11 @@ export function createTextInput(
   function dispose(): void {
     unsubscribeLocale();
     formEl.removeEventListener("submit", handleSubmit);
-    sendBtn.removeEventListener("click", handleSendClick);
-    sendBtn.removeEventListener("mousedown", keepFieldFocus);
+    actionButton.dispose();
     field.removeEventListener("keydown", handleFieldKey);
     field.removeEventListener("input", clearErrorOnInput);
     field.removeEventListener("input", fitField);
+    field.removeEventListener("input", actionButton.refresh);
     field.removeEventListener("paste", onFieldPaste);
     attachBtn.removeEventListener("click", onAttachClick);
     picker.removeEventListener("change", onPickerChange);
