@@ -30,6 +30,7 @@ const ko: Record<string, string> = {
   "aria.voice_input": "음성 입력: {label}",
 
   // surfaces (speech bubble · status pill · text input)
+  "aria.back": "뒤로",
   "aria.attach_image": "이미지 첨부",
   "aria.input_field": "YUI에게 말 걸기",
   "aria.send": "보내기",
@@ -41,6 +42,11 @@ const ko: Record<string, string> = {
   "aria.dock_message": "말풍선을 캐릭터 창으로 되돌리기",
   "aria.pop_message": "말풍선을 메시지 창으로 분리",
   "aria.dismiss_error": "오류 닫기",
+
+  // phone top-row openers
+  "phone.open_history": "대화 기록",
+  "phone.open_settings": "설정",
+
   "input.placeholder": "말 걸기…",
   "input.error_auth": "인증 실패 · API 키 확인",
   "input.error_network": "응답 없음 · 연결 확인",
@@ -328,6 +334,7 @@ const ko: Record<string, string> = {
   "endpoints.url_error": "올바른 URL이 아니에요 (http:// 또는 https://)",
   "endpoints.chat_base_url.label": "채팅 서버 URL",
   "endpoints.stt_base_url.label": "음성 인식(STT) 서버 URL",
+  "endpoints.stt_model.label": "STT 모델",
   "endpoints.tts_base_url.label": "음성 합성(TTS) 서버 URL",
   "endpoints.broker_base_url.label": "표현 브로커(Broker) URL",
   "endpoints.chat_model.label": "채팅 모델",

@@ -9,7 +9,7 @@ import "./controls.css";
 import type { AvatarOption } from "../../config/load";
 import type { createVrmSelection } from "../../io/assets/vrm-selection";
 import type { createChatHistoryStore } from "../../io/chat/chat-history-store";
-import type { DelegationItem, PushSocketState } from "../../io/chat/push-socket";
+import type { DelegationItem } from "../../io/chat/push-socket";
 import type { createSessionDiagnosticsStore } from "../../io/chat/session-diagnostics";
 import type { createSessionStore } from "../../io/chat/session-store";
 import type {
@@ -60,25 +60,26 @@ import { DELEGATION_REFRESH_MS } from "../chips/delegation-rows";
 import type { VoiceInputStatus } from "../chips/voice-input-status";
 import { t } from "../i18n";
 import { type CueListInstance, createCueList } from "../message/cue-list";
+import { createConnectionTab, type PushSocketPanelPort } from "./connection/connection-tab";
 import type { QuickControlsTab } from "./constants";
 import { createHintTooltip } from "./hint-tooltip";
+import { createHistoryTab } from "./history/history-tab";
 import { createPopover } from "./popover";
 import { createReflect } from "./reflect";
 import { createAgentSection } from "./sections/agent-section";
-import { createEndpointsSection } from "./sections/endpoints-section";
 import { createExpressMotionList } from "./sections/express-motion-section";
 import { parseToolLines, serializeToolLines } from "./sections/filler-tool-lines";
-import { createHistorySection } from "./sections/history-section";
 import { createIdleMotionList } from "./sections/idle-motion-section";
 import { createMonitorsSection } from "./sections/monitors-section";
 import { createReactionsSection } from "./sections/reactions-section";
 import { createScreenSection } from "./sections/screen-section";
-import { createSpeakerList } from "./sections/speaker-list";
+import { createSpeakerList, speakerPickerHtml } from "./sections/speaker-list";
 import { createVrmList } from "./sections/vrm-list";
 import { createWorkflowsSection } from "./sections/workflows-section";
 import { handleSegmentKeydown } from "./seg-keyboard";
 import { bindSlider } from "./slider-binding";
 import { createSwitchRows, type SwitchRow } from "./switch-row";
+import { createTabRail } from "./tabs/tab-rail";
 import { buildPanelHtml } from "./template";
 
 type ScreenshotSettingsStore = ReturnType<typeof createScreenshotSettings>;
@@ -96,15 +97,6 @@ type SpeakerSelectionStore = ReturnType<typeof createSpeakerSelection>;
 type SessionDiagnosticsStore = ReturnType<typeof createSessionDiagnosticsStore>;
 type SessionStore = ReturnType<typeof createSessionStore>;
 type ChatHistoryStore = ReturnType<typeof createChatHistoryStore>;
-
-/** The push transport as the settings panel uses it: a state to show and a conversation to reset. */
-export interface PushSocketPanelPort {
-  getState(): PushSocketState;
-  onState(cb: (state: PushSocketState) => void): () => void;
-  sendReset(): boolean;
-  /** Drop the backoff wait and open now — what the status line's button asks for. */
-  reconnectNow(): void;
-}
 
 /** The delegations list as the settings window sees it — mirrored over the bridge. */
 export interface DelegationsPanelPort {
@@ -309,8 +301,6 @@ export function createQuickControls({
   const isWindow = variant === "window";
   // Context-occupancy readout renders only in the settings window, when both stores are injected.
   const hasSession = isWindow && !!sessionDiagnostics && !!sessionStore;
-  // Start fresh lives under the History tab's session list — both variants get it once the stores are there.
-  const showSessionReset = !!transcript && !!sessionDiagnostics && !!sessionStore;
   // Use variant tag to distinguish which window created logs (Tauri merges both window logs to one file).
   const log = createLogger(isWindow ? "settings-ui" : "quick-ui");
 
@@ -341,7 +331,6 @@ export function createQuickControls({
   el.innerHTML = buildPanelHtml({
     isWindow,
     hasSession,
-    showSessionReset,
     showViewpoint: !!onResetViewpoint,
     showIdleMotion: !!idleMotionSettings,
     showExpressMotion: !!expressMotionSettings,
@@ -361,7 +350,6 @@ export function createQuickControls({
   const monitorsSection = createMonitorsSection({ root: el, sourceProvider, settings, log });
   const vrmsEl = el.querySelector<HTMLDivElement>(".yui-vrms")!;
   const vrmAddBtn = el.querySelector<HTMLButtonElement>(".yui-vrm--add")!;
-  const spksEl = el.querySelector<HTMLDivElement>(".yui-spks")!;
   const gainSlider = el.querySelector<HTMLInputElement>(".yui-lipsync-gain__slider")!;
   const vadSlider = el.querySelector<HTMLInputElement>(".yui-vad__slider")!;
   const tablistEl = el.querySelector<HTMLDivElement>(".yui-tabs")!;
@@ -371,7 +359,6 @@ export function createQuickControls({
   const messageBtn = el.querySelector<HTMLButtonElement>(".yui-iconbtn--message");
   const devtoolsBtn = el.querySelector<HTMLButtonElement>(".yui-devtools-open");
   const closeBtn = el.querySelector<HTMLButtonElement>(".yui-iconbtn--close");
-  const spkAddBtn = el.querySelector<HTMLButtonElement>(".yui-spk--add")!;
   // Viewpoint reset button — exists only when onResetViewpoint is injected (null otherwise).
   const viewpointResetBtn = el.querySelector<HTMLButtonElement>(".yui-viewpoint-reset");
   // Thinking filler section node — exists only when fillerSettings is injected (null otherwise).
@@ -394,33 +381,46 @@ export function createQuickControls({
     ? Array.from(fillerLangSegEl.querySelectorAll<HTMLButtonElement>(".yui-seg__btn"))
     : [];
 
-  // ── Endpoints section (URL fields · API key rows · TTS/Chat dropdowns · per-service resets) ──
-  const endpoints = createEndpointsSection({
-    root: el,
+  // ── Speaker picker — the shell keeps its lifecycle; the connection tab mounts the element. ──
+  const speakerHost = document.createElement("div");
+  speakerHost.innerHTML = speakerPickerHtml();
+  // The picker's own .yui-group, so `.yui-group + .yui-group` spaces it under the TTS group.
+  const ttsExtra = speakerHost.firstElementChild as HTMLElement;
+  const spksEl = ttsExtra.querySelector<HTMLDivElement>(".yui-spks")!;
+  const spkAddBtn = ttsExtra.querySelector<HTMLButtonElement>(".yui-spk--add")!;
+
+  // ── Connection tab (URL fields · API key rows · TTS/Chat dropdowns · status line · resets) ──
+  const connectionTab = createConnectionTab({
     endpointsSettings,
     chatKeySettings,
     sttKeySettings,
     ttsKeySettings,
     getEndpointDefaults,
-    reflectEndpoints: () => reflect.reflectEndpoints(),
+    getDefaultChatApi,
+    rows: { chat: "full", tts: "full", broker: true },
+    pushSocket,
     isOpen: () => popover.isOpen(),
+    ttsExtra,
     log,
   });
+  el.querySelector("#yui-panel-conn")!.append(connectionTab.el);
+
+  // ── History tab (session accordion + start fresh) — only with a transcript store. ──
+  const historyTab = transcript
+    ? createHistoryTab({
+        transcript,
+        sessionDiagnostics,
+        sessionStore,
+        stopTurn,
+        pushSocket,
+        getChatApi: () => (isPushMode() ? "push" : undefined),
+        isOpen: () => popover.isOpen(),
+        log,
+      })
+    : null;
+  if (historyTab) el.querySelector("#yui-panel-hist")!.append(historyTab.el);
   const workflows = createWorkflowsSection({ root: el, store: workflowSettings, log });
   const hintTooltip = createHintTooltip({ root: el });
-
-  // History tab (transcript viewer) — rendered only when a transcript store is injected.
-  const history = transcript
-    ? createHistorySection({ root: el, transcript, isOpen: () => popover.isOpen() })
-    : null;
-
-  // Start-fresh footer nodes in the History tab (null when the reset stores are absent).
-  const chatStatusActionBtn = el.querySelector<HTMLButtonElement>(".yui-chat-status__action")!;
-  const sessionResetBtn = el.querySelector<HTMLButtonElement>(".yui-session__reset");
-  // Cue rows also use the .yui-confirm pattern, so scope the session's specifically.
-  const sessionConfirmEl = el.querySelector<HTMLDivElement>(".yui-hist__action .yui-confirm");
-  const sessionConfirmBtn = el.querySelector<HTMLButtonElement>(".yui-session__confirm");
-  const sessionCancelBtn = el.querySelector<HTMLButtonElement>(".yui-session__cancel");
 
   gainSlider.min = String(LIPSYNC_GAIN_MIN);
   gainSlider.max = String(LIPSYNC_GAIN_MAX);
@@ -444,12 +444,11 @@ export function createQuickControls({
     vad,
     agentSettings,
     fillerSettings,
-    endpointsSettings,
     sessionDiagnostics,
-    keyRows: endpoints.keyRows,
-    getEndpointDefaults,
-    getDefaultChatApi,
-    ...(pushSocket ? { getPushState: () => pushSocket.getState() } : {}),
+    // The session section's lost line follows the socket only while push chat is effective.
+    ...(pushSocket
+      ? { getPushState: () => (isPushMode() ? pushSocket.getState() : undefined) }
+      : {}),
     ...(delegations ? { delegations } : {}),
     presenceSettings,
     pacerGapSettings,
@@ -547,15 +546,10 @@ export function createQuickControls({
       reflect.reflectAgent();
       reflect.reflectFiller();
       reflect.reflectLanguage();
-      reflect.reflectEndpoints();
-      reflect.reflectKeyRows();
-      reflect.reflectChatType();
-      reflect.reflectChatPreset();
+      connectionTab.refresh();
       reflect.reflectSession();
       syncDelegations();
-      // The confirm is static markup — disarm it so a reopen never lands on the destructive pill.
-      hideSessionConfirm();
-      history?.render();
+      historyTab?.refresh();
       vrmList.render();
       idleMotionList?.render();
       expressMotionList?.render();
@@ -572,8 +566,7 @@ export function createQuickControls({
         gainPreviewing = false;
       }
       speakerList.stopAudition();
-      endpoints.commitDirtyKeys();
-      endpoints.commitDirtyEndpoints();
+      connectionTab.commit();
     },
   });
 
@@ -719,35 +712,9 @@ export function createQuickControls({
     log.info("viewpoint_reset");
   }
 
-  // ── Session section: start fresh (reset) ──
-
-  function showSessionConfirm(): void {
-    if (sessionConfirmEl) sessionConfirmEl.hidden = false;
-    if (sessionResetBtn) sessionResetBtn.hidden = true;
-  }
-
-  function hideSessionConfirm(): void {
-    if (sessionConfirmEl) sessionConfirmEl.hidden = true;
-    if (sessionResetBtn) sessionResetBtn.hidden = false;
-  }
-
-  // Closes the running conversation: the id pointer and diagnostics reset, the transcript keeps
-  // its turns behind a session boundary so the History tab can still read them.
   // Effective chat protocol: the user's override, else the bundled default.
   function isPushMode(): boolean {
     return (endpointsSettings.get().chat_api || getDefaultChatApi?.()) === "push";
-  }
-
-  function handleSessionReset(): void {
-    // A turn still running stops with the conversation, before the reset frame goes out.
-    stopTurn?.();
-    sessionStore?.clear();
-    sessionDiagnostics?.clear();
-    transcript?.startNewSession();
-    // Push mode keeps its conversation on the backend — it ends only when the frame lands.
-    if (isPushMode()) pushSocket?.sendReset();
-    hideSessionConfirm();
-    log.info("session_reset");
   }
 
   // ── Gain slider ──
@@ -786,57 +753,28 @@ export function createQuickControls({
     log,
   );
 
-  // ── Tab switching ──
-  // Toggle aria-selected/hidden + roving tabindex only. Arrows (←/→/Home/End) activate immediately.
-
-  function selectTab(index: number, focus = false): void {
-    const clamped = Math.min(tabButtons.length - 1, Math.max(0, index));
-    tabButtons.forEach((tab, i) => {
-      const on = i === clamped;
-      tab.setAttribute("aria-selected", String(on));
-      tab.tabIndex = on ? 0 : -1;
-      const panel = el.querySelector<HTMLElement>(`#${tab.getAttribute("aria-controls")}`);
-      if (panel) panel.hidden = !on;
-    });
-    if (focus) tabButtons[clamped]?.focus();
-  }
+  // ── Tab rail (selection, ARIA, keyboard) ──
+  const tabRail = createTabRail({
+    rail: tablistEl,
+    buttons: tabButtons,
+    panels: Array.from(el.querySelectorAll<HTMLElement>(".yui-tabpanel")),
+    initial: "talk",
+  });
 
   function openPanel(anchor?: { x: number; y: number }, opts?: { tab?: QuickControlsTab }): void {
-    const index = opts?.tab ? tabButtons.findIndex((tab) => tab.id === `yui-tab-${opts.tab}`) : -1;
+    const tab = opts?.tab;
     // Select before opening so the panel is positioned around the tab the caller asked for.
-    if (index >= 0) selectTab(index);
-    popover.open(anchor);
-    // open() lands focus on the first control; move it to the tab the caller asked for.
-    if (index >= 0) tabButtons[index]?.focus({ focusVisible: false });
+    if (tab && tabRail.select(tab)) {
+      popover.open(anchor);
+      // open() lands focus on the first control; move it to the tab the caller asked for.
+      tabRail.select(tab, { focusVisible: false });
+    } else {
+      popover.open(anchor);
+    }
   }
 
   function selectedTab(): QuickControlsTab {
-    const tab = tabButtons.find((b) => b.getAttribute("aria-selected") === "true")!;
-    return tab.id.slice("yui-tab-".length) as QuickControlsTab;
-  }
-
-  function handleTabClick(e: MouseEvent): void {
-    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".yui-tab");
-    if (!btn) return;
-    selectTab(tabButtons.indexOf(btn));
-  }
-
-  function handleTabKeydown(e: KeyboardEvent): void {
-    const current = tabButtons.findIndex((t) => t.getAttribute("aria-selected") === "true");
-    const base = current < 0 ? 0 : current;
-    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-      e.preventDefault();
-      selectTab((base + 1) % tabButtons.length, true);
-    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-      e.preventDefault();
-      selectTab((base - 1 + tabButtons.length) % tabButtons.length, true);
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      selectTab(0, true);
-    } else if (e.key === "End") {
-      e.preventDefault();
-      selectTab(tabButtons.length - 1, true);
-    }
+    return tabRail.selected() as QuickControlsTab;
   }
 
   // ── Subscriptions ──
@@ -910,20 +848,10 @@ export function createQuickControls({
       reflect.reflectVad();
     }
   });
-  const unsubscribeEndpoints = endpointsSettings.subscribe(() => {
-    if (popover.isOpen()) {
-      reflect.reflectEndpoints();
-      reflect.reflectChatType();
-      reflect.reflectChatPreset();
-    }
-  });
-  // The socket moves on its own — its line and the session section's rows follow whether or not
-  // a setting changed.
+  // The socket moves on its own — the session section's rows follow whether or not a setting
+  // changed. (The Connection tab keeps its own subscription for the status line.)
   const unsubscribePushState = pushSocket?.onState(() => {
-    if (popover.isOpen()) {
-      reflect.reflectChatStatus();
-      reflect.reflectDelegations();
-    }
+    if (popover.isOpen()) reflect.reflectDelegations();
   });
   // Reflect thinking-filler store updates to section (includes other-window reloadFromStorage).
   const unsubscribeFiller = fillerSettings?.subscribe(() => {
@@ -976,18 +904,11 @@ export function createQuickControls({
   fillerToolTextareaEl?.addEventListener("input", handleFillerTextareaInput);
   voiceSwitchBtn.addEventListener("click", handleVoiceSwitchClick);
   // Gain/VAD sliders are wired inside bindSlider() above; disposeGainSlider/disposeVadSlider tear them down.
-  tablistEl.addEventListener("click", handleTabClick);
-  tablistEl.addEventListener("keydown", handleTabKeydown);
   vrmsEl.addEventListener("keydown", vrmList.handleKeydown);
   vrmAddBtn.addEventListener("click", vrmList.handleAddClick);
   spksEl.addEventListener("keydown", speakerList.handleKeydown);
   spkAddBtn.addEventListener("click", speakerList.handleAddClick);
   viewpointResetBtn?.addEventListener("click", handleResetViewpoint);
-  const handleChatStatusAction = (): void => pushSocket?.reconnectNow();
-  chatStatusActionBtn.addEventListener("click", handleChatStatusAction);
-  sessionResetBtn?.addEventListener("click", showSessionConfirm);
-  sessionConfirmBtn?.addEventListener("click", handleSessionReset);
-  sessionCancelBtn?.addEventListener("click", hideSessionConfirm);
   popOutBtn?.addEventListener("click", handlePopOut);
   messageBtn?.addEventListener("click", handleMessage);
   devtoolsBtn?.addEventListener("click", () => onOpenDevtools?.());
@@ -997,13 +918,13 @@ export function createQuickControls({
 
   function dispose(): void {
     disposed = true;
-    endpoints.dispose();
+    connectionTab.dispose();
     workflows.dispose();
     screen.dispose();
     reactions.dispose();
     agent.dispose();
     hintTooltip.dispose();
-    history?.dispose();
+    historyTab?.dispose();
     scheduleCueList?.destroy();
     proactiveCueList?.destroy();
     unsubscribe();
@@ -1017,7 +938,6 @@ export function createQuickControls({
     unsubscribeVoice();
     unsubscribeLipsync();
     unsubscribeVad();
-    unsubscribeEndpoints();
     unsubscribePushState?.();
     unsubscribeFiller?.();
     unsubscribeVrm();
@@ -1046,17 +966,12 @@ export function createQuickControls({
     voiceSwitchBtn.removeEventListener("click", handleVoiceSwitchClick);
     disposeGainSlider();
     disposeVadSlider();
-    tablistEl.removeEventListener("click", handleTabClick);
-    tablistEl.removeEventListener("keydown", handleTabKeydown);
+    tabRail.dispose();
     vrmsEl.removeEventListener("keydown", vrmList.handleKeydown);
     vrmAddBtn.removeEventListener("click", vrmList.handleAddClick);
     spksEl.removeEventListener("keydown", speakerList.handleKeydown);
     spkAddBtn.removeEventListener("click", speakerList.handleAddClick);
     viewpointResetBtn?.removeEventListener("click", handleResetViewpoint);
-    chatStatusActionBtn.removeEventListener("click", handleChatStatusAction);
-    sessionResetBtn?.removeEventListener("click", showSessionConfirm);
-    sessionConfirmBtn?.removeEventListener("click", handleSessionReset);
-    sessionCancelBtn?.removeEventListener("click", hideSessionConfirm);
     popOutBtn?.removeEventListener("click", handlePopOut);
     messageBtn?.removeEventListener("click", handleMessage);
     closeBtn?.removeEventListener("click", popover.close);

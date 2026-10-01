@@ -9,6 +9,7 @@
 import "../styles.css";
 import { wireSettingsWindowSync } from "../app/cross-window/wire-cross-window";
 import { createConversationStores } from "../app/settings/conversation-stores";
+import { devKeyFallback } from "../app/settings/dev-key-fallback";
 import { createEffectiveEndpoints, wireSpeakerSelection } from "../app/settings/wire-avatar";
 import { wireCueLocaleSync } from "../app/settings/wire-cue-locale-sync";
 import { TTS_API_KEY_SECRET } from "../config/load";
@@ -29,7 +30,7 @@ import { resolveScreenSourceProvider } from "../io/window/capture/tauri-screen";
 import { closeSettingsWindow, titleSettingsWindow } from "../io/window/openers/settings-window";
 import { excludeOwnOriginFromCorsFetch } from "../io/window/own-origin-fetch";
 import { createLogger, initLogger } from "../logger";
-import { endpointDefaultsFromConfig } from "../settings/backend/endpoints-settings";
+import { endpointDefaultsOf } from "../settings/backend/endpoints-settings";
 import { rateLimitDefaultsFromConfig } from "../settings/backend/guardrails-settings";
 import { screenDefaultsFromConfig } from "../settings/capture/screen-settings";
 import { createSettingsStores } from "../settings/settings-stores";
@@ -89,7 +90,7 @@ async function bootstrap(): Promise<void> {
   const config = createConfigStore({
     secrets: createSettingsSecretProvider({
       stores: { [TTS_API_KEY_SECRET]: ttsKeySettings },
-      fallback: { [TTS_API_KEY_SECRET]: import.meta.env.VITE_YUI_TTS_KEY },
+      fallback: devKeyFallback(),
     }),
   });
   const getTtsApiKey = (): Promise<string | undefined> => config.secrets.get(TTS_API_KEY_SECRET);
@@ -271,14 +272,7 @@ async function bootstrap(): Promise<void> {
       chatKeySettings,
       sttKeySettings,
       ttsKeySettings,
-      getEndpointDefaults: () => {
-        if (!configLoaded) return undefined;
-        try {
-          return endpointDefaultsFromConfig(config.get().endpoints);
-        } catch {
-          return undefined;
-        }
-      },
+      getEndpointDefaults: () => (configLoaded ? endpointDefaultsOf(config) : undefined),
       getDefaultChatApi: () => {
         if (!configLoaded) return undefined;
         try {

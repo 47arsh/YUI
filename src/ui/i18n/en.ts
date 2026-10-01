@@ -31,6 +31,7 @@ const en: Record<string, string> = {
   "aria.voice_input": "Voice input: {label}",
 
   // surfaces (speech bubble · status pill · text input)
+  "aria.back": "Back",
   "aria.attach_image": "Attach image",
   "aria.input_field": "Talk to YUI",
   "aria.send": "Send",
@@ -42,6 +43,11 @@ const en: Record<string, string> = {
   "aria.dock_message": "Move speech back to the character",
   "aria.pop_message": "Move speech to the message window",
   "aria.dismiss_error": "Dismiss error",
+
+  // phone top-row openers
+  "phone.open_history": "Conversation history",
+  "phone.open_settings": "Settings",
+
   "input.placeholder": "Say something…",
   "input.error_auth": "Auth failed · check API key",
   "input.error_network": "No response · check connection",
@@ -329,6 +335,7 @@ const en: Record<string, string> = {
   "endpoints.url_error": "Not a valid URL (http:// or https://)",
   "endpoints.chat_base_url.label": "Chat server URL",
   "endpoints.stt_base_url.label": "Speech recognition (STT) server URL",
+  "endpoints.stt_model.label": "STT model",
   "endpoints.tts_base_url.label": "Speech synthesis (TTS) server URL",
   "endpoints.broker_base_url.label": "Expression broker URL",
   "endpoints.chat_model.label": "Chat model",
